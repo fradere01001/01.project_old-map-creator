@@ -12,3 +12,15 @@ Changes:
 
 --/10/2021:
 added the exel creator
+
+
+### Modified: **27/11/2025**
+
+**Changes:**
+- modified requirements.txt
+- moved all code to main.py
+- added format local_readme.md
+- local creation of .gitingnore
+
+**Trouble Shooting**
+- pip installation on venv (installation went global)
