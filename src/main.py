@@ -1,7 +1,3 @@
-#!/usr/bin/python
-# -*- coding: utf-8 -*-
-# n1
-
 import time
 from geopy.geocoders import Nominatim
 from xlwt import Workbook

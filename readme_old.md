@@ -1,27 +1,7 @@
-
-## Project 01:
-
-### Idea:
-- 
-
-### Breakdown: 
-- 
-
-### Ideas Branches:
-1.
-2. 
-3. 
-
----
-### Modified: **27/11/2025**
-
-**Changes:**
-- 
-
-**Trouble Shooting**
--
-
 # Goals / Changes:
+
+- the language is python
+
 The goal is to write a program that allows you to ping addresses on google maps or on a map in general
 --> use the personal map --> this is project is all about creating an exel with locations and longitude and latitude
 
@@ -44,12 +24,3 @@ added the exel creator
 
 **Trouble Shooting**
 - pip installation on venv (installation went global)
-
-### Modified: **03/12/2025**
-**Tasks/Changes:**
-- 
-
-**Trouble Shooting**
--
-
-    

@@ -1,26 +1,25 @@
-# Goals / Changes:
+# 01.project_old-map-creator
+**Idea & what it does:** 
 
-- the language is python
+                              
+## 1. The Problem It Solves (why)
 
-The goal is to write a program that allows you to ping addresses on google maps or on a map in general
---> use the personal map --> this is project is all about creating an exel with locations and longitude and latitude
+                              
+## 2. Tech Stack & Architecture
+**Language:** python // geographiclib, xlwt, geopy
 
-Possible improvments:
-- add the option to import lists in the exel directly
+**Design:** (file structure) 
 
-Changes:
+**Additional** (eg. security)
 
---/10/2021:
-added the exel creator
+## 3. Quick Start (Installation & Usage)
+**Step 1:** Clone the repo.
 
+**Step 2:** Install requirements (pip install -r requirements.txt).
 
-### Modified: **27/11/2025**
+**Step 3:** Run python main.py in the background.
 
-**Changes:**
-- modified requirements.txt
-- moved all code to main.py
-- added format local_readme.md
-- local creation of .gitingnore
+**Step 4:** trigger requirement for program
 
-**Trouble Shooting**
-- pip installation on venv (installation went global)
+## 4. Key Technical Challenges Overcome
+- 
