@@ -1,26 +1,12 @@
-# Goals / Changes:
+## Project 01 - 01.project_old-map-creator
+1. Core Idea & Architecture Rules:
+What is the big picture?
+a simple program for locating places in a text or xlsx file with coordinates, build them into a list and then show them all together.
+an implementation for google maps would be great, maybe output the format needed for the personalised maps so that the maps themselves can be uploaded.
 
-- the language is python
+2. Active Backlog (To-Do):
+- fix it
+- add some features
 
-The goal is to write a program that allows you to ping addresses on google maps or on a map in general
---> use the personal map --> this is project is all about creating an exel with locations and longitude and latitude
-
-Possible improvments:
-- add the option to import lists in the exel directly
-
-Changes:
-
---/10/2021:
-added the exel creator
-
-
-### Modified: **27/11/2025**
-
-**Changes:**
-- modified requirements.txt
-- moved all code to main.py
-- added format local_readme.md
-- local creation of .gitingnore
-
-**Trouble Shooting**
-- pip installation on venv (installation went global)
+3. Known Bugs / Blockers:
+- doesn't work 💀
