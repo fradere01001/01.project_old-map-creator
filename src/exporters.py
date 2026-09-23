@@ -10,9 +10,17 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
-from .models import Outcome, RowOutcome
+from .models import (
+    DestinationMode,
+    DestinationPlan,
+    Outcome,
+    RowOutcome,
+    location_identity,
+    unique_locations,
+)
+from .workbooks import file_fingerprint, workbook_location_identity
 
 
 SUPPORTED_FORMATS = {"xlsx", "csv", "geojson", "kml"}
@@ -131,20 +139,35 @@ class Exporter(Protocol):
 
 
 class XlsxExporter:
-    def __init__(self, destination: Path):
+    def __init__(
+        self,
+        destination: Path,
+        destination_plan: DestinationPlan | None = None,
+        expected_fingerprint: str | None = None,
+    ):
         self.destination = destination
+        self.destination_plan = destination_plan or DestinationPlan(
+            DestinationMode.NEW, destination, "xlsx"
+        )
+        self.expected_fingerprint = (
+            expected_fingerprint or self.destination_plan.base_fingerprint
+        )
 
     def publish(self, outcomes: Sequence[RowOutcome]) -> None:
+        if self.destination_plan.mode is DestinationMode.EXTEND:
+            self._publish_extension(outcomes)
+            return
+
         def write(path: Path) -> None:
             workbook = Workbook()
             locations = workbook.active
             locations.title = "Locations"
             locations.append(("Address", "Latitude", "Longitude"))
-            for item in outcomes:
-                if item.outcome is Outcome.RESOLVED:
-                    locations.append(
-                        (item.resolved_address, item.latitude, item.longitude)
-                    )
+            unique, _ = unique_locations(list(outcomes))
+            for item in unique:
+                locations.append(
+                    (item.resolved_address, item.latitude, item.longitude)
+                )
             report = workbook.create_sheet("Import Report")
             report.append(REPORT_HEADERS)
             for item in sorted(outcomes, key=lambda value: value.source_row):
@@ -152,6 +175,63 @@ class XlsxExporter:
             workbook.save(path)
 
         atomic_publish(self.destination, write)
+
+    def _publish_extension(self, outcomes: Sequence[RowOutcome]) -> None:
+        plan = self.destination_plan
+        layout = plan.layout
+        if layout is None:
+            raise CheckpointError("Existing workbook layout is missing.")
+        current = file_fingerprint(self.destination)
+        if self.expected_fingerprint and current != self.expected_fingerprint:
+            raise CheckpointError(
+                "Existing workbook changed outside this session; refusing to overwrite it."
+            )
+
+        def write(path: Path) -> None:
+            workbook = load_workbook(self.destination, data_only=False)
+            try:
+                if layout.location_sheet in workbook.sheetnames:
+                    locations = workbook[layout.location_sheet]
+                else:
+                    locations = workbook.create_sheet(layout.location_sheet)
+                    locations.cell(layout.header_row, layout.address_column, "Address")
+                    locations.cell(layout.header_row, layout.latitude_column, "Latitude")
+                    locations.cell(layout.header_row, layout.longitude_column, "Longitude")
+
+                existing: set[str] = set()
+                for row in range(layout.header_row + 1, locations.max_row + 1):
+                    identity = workbook_location_identity(
+                        locations.cell(row, layout.address_column).value,
+                        locations.cell(row, layout.latitude_column).value,
+                        locations.cell(row, layout.longitude_column).value,
+                    )
+                    if identity:
+                        existing.add(identity)
+                unique, _ = unique_locations(list(outcomes), existing)
+                for item in unique:
+                    row = locations.max_row + 1
+                    locations.cell(row, layout.address_column, item.resolved_address)
+                    locations.cell(row, layout.latitude_column, item.latitude)
+                    locations.cell(row, layout.longitude_column, item.longitude)
+
+                if layout.report_sheet in workbook.sheetnames:
+                    report = workbook[layout.report_sheet]
+                else:
+                    report = workbook.create_sheet(layout.report_sheet)
+                    report.append(REPORT_HEADERS)
+                if report.max_row >= layout.report_start_row:
+                    report.delete_rows(
+                        layout.report_start_row,
+                        report.max_row - layout.report_start_row + 1,
+                    )
+                for item in sorted(outcomes, key=lambda value: value.source_row):
+                    report.append(report_values(item))
+                workbook.save(path)
+            finally:
+                workbook.close()
+
+        atomic_publish(self.destination, write)
+        self.expected_fingerprint = file_fingerprint(self.destination)
 
 
 class CsvExporter:
@@ -181,9 +261,8 @@ class GeoJsonExporter:
     def publish(self, outcomes: Sequence[RowOutcome]) -> None:
         def write(path: Path) -> None:
             features = []
-            for item in sorted(outcomes, key=lambda value: value.source_row):
-                if item.outcome is not Outcome.RESOLVED:
-                    continue
+            unique, _ = unique_locations(list(outcomes))
+            for item in unique:
                 features.append(
                     {
                         "type": "Feature",
@@ -224,9 +303,8 @@ class KmlExporter:
             ET.register_namespace("", self.NAMESPACE)
             root = ET.Element(f"{{{self.NAMESPACE}}}kml")
             document = ET.SubElement(root, f"{{{self.NAMESPACE}}}Document")
-            for item in sorted(outcomes, key=lambda value: value.source_row):
-                if item.outcome is not Outcome.RESOLVED:
-                    continue
+            unique, _ = unique_locations(list(outcomes))
+            for item in unique:
                 placemark = ET.SubElement(
                     document, f"{{{self.NAMESPACE}}}Placemark"
                 )
@@ -250,9 +328,14 @@ class KmlExporter:
         CsvExporter(self.report_destination).publish(outcomes)
 
 
-def get_exporter(destination: Path, output_format: str) -> Exporter:
+def get_exporter(
+    destination: Path,
+    output_format: str,
+    destination_plan: DestinationPlan | None = None,
+    expected_fingerprint: str | None = None,
+) -> Exporter:
     if output_format == "xlsx":
-        return XlsxExporter(destination)
+        return XlsxExporter(destination, destination_plan, expected_fingerprint)
     if output_format == "csv":
         return CsvExporter(destination)
     if output_format == "geojson":
@@ -267,15 +350,37 @@ class WorkbookOutput:
 
     HEADERS = ("Address", "Latitude", "Longitude")
 
-    def __init__(self, destination: Path, workbook_factory: Callable[[], object] | None = None):
+    def __init__(
+        self,
+        destination: Path,
+        workbook_factory: Callable[[], object] | None = None,
+        destination_plan: DestinationPlan | None = None,
+    ):
         self.destination = destination
         self._outcomes: list[RowOutcome] = []
         self.location_count = 0
         self.saved_count = 0
         output_format = destination.suffix.lower().lstrip(".") or "xlsx"
-        self.exporter = get_exporter(destination, output_format)
+        self.destination_plan = destination_plan or DestinationPlan(
+            DestinationMode.NEW, destination, output_format
+        )
+        self.exporter = get_exporter(
+            destination, output_format, self.destination_plan
+        )
+        self._identities = set(self.destination_plan.existing_location_identities)
+        self.last_add_duplicate = False
 
-    def add_location(self, location: object) -> None:
+    def add_location(self, location: object) -> bool:
+        identity = location_identity(
+            str(getattr(location, "address")),
+            float(getattr(location, "latitude")),
+            float(getattr(location, "longitude")),
+        )
+        if identity is None or identity in self._identities:
+            self.last_add_duplicate = True
+            return False
+        self.last_add_duplicate = False
+        self._identities.add(identity)
         self.location_count += 1
         self._outcomes.append(
             RowOutcome(
@@ -287,6 +392,7 @@ class WorkbookOutput:
                 longitude=float(getattr(location, "longitude")),
             )
         )
+        return True
 
     def checkpoint(self) -> None:
         self.exporter.publish(self._outcomes)

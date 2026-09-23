@@ -13,7 +13,7 @@ class ManualStore(Protocol):
     location_count: int
     saved_count: int
 
-    def add_location(self, location: object) -> None: ...
+    def add_location(self, location: object) -> bool: ...
     def checkpoint(self) -> None: ...
 
 
@@ -57,7 +57,10 @@ def run_session(
                 outcome = geocode_address(geocoder, address)
                 if outcome.status is GeocodeStatus.SUCCESS:
                     assert outcome.location is not None
-                    store.add_location(outcome.location)
+                    added = store.add_location(outcome.location)
+                    if not added:
+                        output_fn(f"Already exists: {outcome.location.address}")
+                        break
                     try:
                         store.checkpoint()
                     except CheckpointError as error:

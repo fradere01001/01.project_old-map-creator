@@ -18,7 +18,7 @@ python -m pip install -r requirements.txt
 python -m src.main
 ```
 
-Choose manual entry or batch import. A native Save dialog opens immediately after the mode selection, before addresses are collected, imported, or sent to the provider. It offers `.xlsx`, `.csv`, `.geojson`, and `.kml`; cancelling exits without creating a file. Batch mode then opens a native file picker for the CSV, TXT, or XLSX input. On a headless system, the program falls back to explicit terminal path prompts.
+Choose manual entry or batch import, then choose whether to create a new output or extend an existing XLSX workbook. New output opens the Save dialog; extension opens an XLSX file picker and previews the table that will receive locations. Cancellation occurs before geocoding or file changes. Batch mode then opens a file picker for its separate CSV, TXT, or XLSX source. On a headless system, the program falls back to explicit terminal path prompts.
 
 Manual mode checkpoints every resolved place and immediately returns to the address prompt; type `finish` there when done. A lookup with no match can be retried, corrected, skipped, or used to finish. Service failures are reported separately and can be retried, skipped, or used to finish.
 
@@ -45,6 +45,14 @@ Public Nominatim requests use one worker, a descriptive user agent, finite retri
 
 Every row is classified as `resolved`, `blank`, `no_match`, or `service_failure`, with cache and duplicate provenance reported separately. Files are written beside the destination and atomically replaced so a failed checkpoint preserves the prior file.
 
+Location-bearing outputs are duplicate-free: `Locations`, GeoJSON features, and KML placemarks contain the first occurrence of each normalized resolved address. `Import Report`, CSV, and companion reports retain every source row, including duplicates.
+
+## Extending an existing XLSX
+
+Manual and batch workflows can add locations to any readable `.xlsx` workbook. If one unambiguous table has `Address`, `Latitude`, and `Longitude` headers, new unique locations are appended there. Otherwise the program preserves existing sheets and creates a non-conflicting standard location sheet. Common cell values, formulas, styles, dimensions, and sheet order are preserved; advanced Excel features unsupported by `openpyxl`, encrypted files, `.xls`, and `.xlsm` are outside this mode's preservation guarantee.
+
+Existing and new locations share the same duplicate boundary. If a manual or batch result already exists, no second location row is added; batch report rows are still retained. An external edit during a session or before resume causes a safe stop instead of an overwrite. A batch source must be a different file from the workbook being extended.
+
 Legacy `.xls` output has been fully replaced. Use `.xlsx`; existing `.xls` files are not valid batch inputs and should be converted with a spreadsheet application first.
 
 ## Command line
@@ -66,6 +74,8 @@ Manual mode can also bypass the Save dialog:
 
 ```shell
 python -m src.main --manual --output map.xlsx
+python -m src.main --manual --extend-existing map.xlsx
+python -m src.main --batch new-addresses.csv --address-column Address --extend-existing map.xlsx --yes
 ```
 
 Interrupted batch state is stored beside the output as `.<output-name>.oldmap-job.sqlite3`. Resume with either the output path or the state path:

@@ -17,6 +17,7 @@ from .models import (
     Outcome,
     ProgressSummary,
     RowOutcome,
+    DestinationPlan,
 )
 
 
@@ -39,6 +40,7 @@ def build_batch_plan(
     cache: GeocodeCache,
     provider_id: str = "nominatim-public",
     provider_options: dict[str, object] | None = None,
+    destination_plan: DestinationPlan | None = None,
 ) -> BatchPlan:
     records = build_records(data, address_column)
     options = provider_options or {}
@@ -57,6 +59,7 @@ def build_batch_plan(
         unique_count += 1
         if cache.get(record.original_address, provider_id, options) is not None:
             cached_count += 1
+    destination = destination_plan
     return BatchPlan(
         source_path=data.source_path,
         source_hash=data.source_hash,
@@ -72,6 +75,18 @@ def build_batch_plan(
         unique_query_count=unique_count,
         cached_query_count=cached_count,
         preview=tuple(item.original_address for item in records[:5]),
+        destination_mode=destination.mode.value if destination else "new",
+        workbook_layout=(
+            destination.to_dict()["layout"] if destination else None
+        ),
+        base_fingerprint=destination.base_fingerprint if destination else None,
+        existing_location_identities=(
+            destination.existing_location_identities if destination else ()
+        ),
+        existing_location_count=(
+            len(destination.existing_location_identities) if destination else 0
+        ),
+        suppressed_location_count=duplicate_count,
     )
 
 
@@ -86,6 +101,9 @@ def format_plan(plan: BatchPlan) -> str:
         f"Address column: {plan.address_column}\nRows: {len(plan.records)}; "
         f"blank: {plan.blank_count}; duplicates: {plan.duplicate_count}; "
         f"unique queries: {plan.unique_query_count}; cached: {plan.cached_query_count}\n"
+        f"Destination mode: {plan.destination_mode}; existing locations: "
+        f"{plan.existing_location_count}; initially suppressed: "
+        f"{plan.suppressed_location_count}\n"
         f"Output: {plan.output_path} ({plan.output_format})\n"
         "Provider: public Nominatim; uncached requests are serialized at >=1 second.\n"
         f"First rows:\n{preview}"
@@ -173,10 +191,14 @@ def process_batch(
         completed[record.source_row] = row_outcome
         ordered = [completed[key] for key in sorted(completed)]
         exporter.publish(ordered)
+        if hasattr(exporter, "expected_fingerprint"):
+            job.set_expected_fingerprint(getattr(exporter, "expected_fingerprint"))
         output_fn(progress_text(ProgressSummary.from_outcomes(len(plan.records), ordered)))
 
     ordered = [completed[key] for key in sorted(completed)]
     exporter.publish(ordered)
+    if hasattr(exporter, "expected_fingerprint"):
+        job.set_expected_fingerprint(getattr(exporter, "expected_fingerprint"))
     summary = ProgressSummary.from_outcomes(len(plan.records), ordered)
     job.mark_complete()
     output_fn("Complete. " + progress_text(summary))

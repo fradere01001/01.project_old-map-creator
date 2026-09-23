@@ -9,7 +9,7 @@ from pathlib import Path
 from .models import BatchPlan, Outcome, RowOutcome
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class JobStateError(ValueError):
@@ -74,7 +74,10 @@ class JobState:
         if version is None:
             raise JobStateError("Job state has not been initialized.")
         if version != SCHEMA_VERSION:
-            raise JobStateError(f"Unsupported job-state version: {version}")
+            raise JobStateError(
+                f"Unsupported job-state version: {version}; restart this batch "
+                "to migrate it to the current resumable format."
+            )
         payload = self._get("plan")
         if not isinstance(payload, dict):
             raise JobStateError("Job state does not contain a valid plan.")
@@ -121,6 +124,15 @@ class JobState:
     def mark_complete(self) -> None:
         with self.connection:
             self._set("complete", True)
+
+    def set_expected_fingerprint(self, fingerprint: str | None) -> None:
+        with self.connection:
+            self._set("expected_workbook_fingerprint", fingerprint)
+
+    @property
+    def expected_fingerprint(self) -> str | None:
+        value = self._get("expected_workbook_fingerprint")
+        return value if isinstance(value, str) else None
 
     @property
     def is_complete(self) -> bool:

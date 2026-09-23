@@ -70,6 +70,56 @@ def native_open_dialog() -> str | None:
     return selected or None
 
 
+def native_existing_workbook_dialog() -> str | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            selected = filedialog.askopenfilename(
+                title="Choose an XLSX workbook to extend",
+                filetypes=[("Excel workbooks", "*.xlsx")],
+            )
+        finally:
+            root.destroy()
+    except Exception as error:
+        raise DialogUnavailable(str(error)) from error
+    return selected or None
+
+
+def select_existing_workbook(
+    input_fn: Callable[[str], str] = input,
+    output_fn: Callable[[str], None] = print,
+    chooser: Callable[[], str | None] = native_existing_workbook_dialog,
+    cli_path: str | None = None,
+    use_gui: bool = True,
+) -> Path | None:
+    def validate(raw: str) -> Path:
+        path = Path(raw.strip()).expanduser().resolve()
+        if path.suffix.lower() != ".xlsx":
+            raise ValueError("Only an existing .xlsx workbook can be extended.")
+        if not path.is_file():
+            raise ValueError(f"Existing workbook is not readable: {path}")
+        return path
+
+    if cli_path is not None:
+        return validate(cli_path)
+    if use_gui:
+        try:
+            selected = chooser()
+        except DialogUnavailable as error:
+            output_fn(f"Native Open dialog unavailable ({error}); using terminal input.")
+        else:
+            return None if selected is None else validate(selected)
+    while True:
+        try:
+            return validate(input_fn("Full path to existing .xlsx workbook: "))
+        except ValueError as error:
+            output_fn(str(error))
+
+
 def _validate_input_path(raw_path: str) -> Path:
     cleaned = raw_path.strip()
     candidate = Path(cleaned).expanduser()

@@ -9,7 +9,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.cli import build_parser, main
-from src.dialogs import select_input_path, select_output_path
+from src.dialogs import select_existing_workbook, select_input_path, select_output_path
 from src.exporters import (
     CheckpointError,
     WorkbookOutput,
@@ -31,6 +31,7 @@ __all__ = [
     "run_session",
     "select_output_path",
     "select_input_path",
+    "select_existing_workbook",
     "validate_output_destination",
 ]
 

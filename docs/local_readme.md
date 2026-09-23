@@ -6,17 +6,33 @@ a simple program for locating places in a text or xlsx file with coordinates, bu
 an implementation for google maps would be great, maybe output the format needed for the personalised maps so that the maps themselves can be uploaded.
 
 2. Active Backlog (To-Do):
-- fix it -- done
-- add import file -- done
-- new xlsx extension -- done
-- reworked error handling
-- 
-- formatter to work in tandem?
+- fix it ✅
+- add import file ✅
+- new xlsx extension ✅
+- reworked error handling ✅
+- formatter to work in tandem? ✅
     - eg throw some file with some files and changes it in readable format
-- picking up and adding on xlsx files
-- don't ask for confirmation of a new one each entry
-    - just add option to break cleanly with "finish" or similar
-- building webui
+- picking up and adding on xlsx files ✅
+- don't ask for confirmation of a new one each entry ✅
+    - just add option to break cleanly with "finish" or similar ✅
+eg of current workflow
+```bash
+python3 src/main.py --batch ~/Downloads/file_1.txt --output ~/Downloads/batch_test_1.xlsx --yes --overwrite
+```
+```txt
+SQLite creates a database for each turned file making it possible to ignore calculation of duplicate
+```
+- right now only --batch interruptions generate .sql db file and become available to --resume 
+    - change this to manual mode as well
+- remove adding of duplicate entries from final output
+    - the entry is kept in the report page
+- adding possibility to pick up existing .xlsx files and manually / batch add entries
+    - arbitrary .xlsx files
+
+---
+
+- building webui (style provided theme black & #00cf00)
+
 - adding a map of the places with pins in the selected locations
     - on this one i think would be cool to have some googlemaps api to avoid havind to build the maps from the start and to make it implementable in a google maps account.
 

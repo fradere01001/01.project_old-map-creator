@@ -9,7 +9,7 @@ from typing import Callable, Sequence
 
 from .batch import build_batch_plan, confirm_plan, format_plan, process_batch
 from .cache import GeocodeCache
-from .dialogs import select_input_path, select_output_path
+from .dialogs import select_existing_workbook, select_input_path, select_output_path
 from .exporters import CheckpointError, WorkbookOutput, get_exporter
 from .geocoding import BatchGeocoder, ProviderProfile, make_default_geocoder
 from .importers import (
@@ -20,6 +20,13 @@ from .importers import (
 )
 from .jobs import JobState, JobStateError, job_state_path
 from .manual import run_session
+from .models import DestinationMode, DestinationPlan, WorkbookLayout
+from .workbooks import (
+    WorkbookInspectionError,
+    extension_preview,
+    file_fingerprint,
+    inspect_existing_workbook,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,7 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--resume", metavar="STATE_OR_OUTPUT", help="resume an interrupted batch job")
     parser.add_argument("--sheet", help="XLSX worksheet name")
     parser.add_argument("--address-column", help="column containing addresses")
-    parser.add_argument("--output", help="destination file")
+    destinations = parser.add_mutually_exclusive_group()
+    destinations.add_argument("--output", help="new destination file")
+    destinations.add_argument(
+        "--extend-existing", metavar="WORKBOOK", help="existing XLSX workbook to extend"
+    )
     parser.add_argument(
         "--format", choices=("xlsx", "csv", "geojson", "kml"), help="output format"
     )
@@ -52,6 +63,30 @@ def _choose_mode(input_fn: Callable[[str], str], output_fn: Callable[[str], None
         if answer in {"b", "batch"}:
             return "batch"
         output_fn("Choose manual or batch.")
+
+
+def _choose_destination_mode(
+    input_fn: Callable[[str], str], output_fn: Callable[[str], None]
+) -> DestinationMode:
+    while True:
+        answer = input_fn("Create a new output or extend an existing XLSX? [n/e]: ").strip().lower()
+        if answer in {"n", "new", "create"}:
+            return DestinationMode.NEW
+        if answer in {"e", "extend", "existing"}:
+            return DestinationMode.EXTEND
+        output_fn("Choose new or extend.")
+
+
+def _confirm_layout(
+    input_fn: Callable[[str], str], output_fn: Callable[[str], None]
+) -> bool:
+    while True:
+        answer = input_fn("Use this workbook layout? [y/n]: ").strip().lower()
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        output_fn("Please answer yes or no.")
 
 
 def _choose_sheet(
@@ -115,6 +150,21 @@ def _run_resume(
         current = load_source(plan.source_path, plan.worksheet)
         if current.source_hash != plan.source_hash:
             raise JobStateError("Source file changed since this job was created.")
+        layout = WorkbookLayout(**plan.workbook_layout) if plan.workbook_layout else None
+        destination_plan = DestinationPlan(
+            DestinationMode(plan.destination_mode),
+            plan.output_path,
+            plan.output_format,
+            layout,
+            plan.base_fingerprint,
+            plan.existing_location_identities,
+        )
+        expected = job.expected_fingerprint or plan.base_fingerprint
+        if destination_plan.mode is DestinationMode.EXTEND:
+            if expected is None or file_fingerprint(plan.output_path) != expected:
+                raise JobStateError(
+                    "Existing workbook changed since the last checkpoint; refusing to resume."
+                )
         with GeocodeCache(cache_path) as cache:
             profile = ProviderProfile(provider_id=plan.provider_id)
             geocoder = BatchGeocoder(geocoder_factory(profile), profile)
@@ -123,7 +173,9 @@ def _run_resume(
                 geocoder,
                 cache,
                 job,
-                get_exporter(plan.output_path, plan.output_format),
+                get_exporter(
+                    plan.output_path, plan.output_format, destination_plan, expected
+                ),
                 output_fn,
             )
     return 0
@@ -136,6 +188,7 @@ def main(
     output_fn: Callable[[str], None] = print,
     chooser: Callable[[], str | None] | None = None,
     input_chooser: Callable[[], str | None] | None = None,
+    existing_chooser: Callable[[], str | None] | None = None,
     cache_path: str | Path | None = None,
     geocoder_factory: Callable[[ProviderProfile], object] = make_default_geocoder,
 ) -> int:
@@ -147,7 +200,7 @@ def main(
     try:
         if args.resume:
             forbidden = any(
-                (args.output, args.format, args.sheet, args.address_column, args.yes, args.overwrite)
+                (args.output, args.extend_existing, args.format, args.sheet, args.address_column, args.yes, args.overwrite)
             )
             if forbidden:
                 raise ValueError("--resume cannot be combined with planning or output options.")
@@ -159,31 +212,65 @@ def main(
                 raise ValueError("Choose --manual, --batch, or --resume.")
             mode = _choose_mode(input_fn, output_fn)
 
-        if noninteractive and args.output is None:
-            raise ValueError("Non-interactive workflows require --output.")
-        chooser_fn = chooser if chooser is not None else None
-        selection_kwargs = {
-            "input_fn": input_fn,
-            "output_fn": output_fn,
-            "cli_output": args.output,
-            "explicit_format": args.format,
-            "overwrite": args.overwrite,
-            "use_gui": not noninteractive,
-        }
-        if chooser_fn is not None:
-            selection_kwargs["chooser"] = chooser_fn
-        selected = select_output_path(**selection_kwargs)  # type: ignore[arg-type]
-        if selected is None:
-            output_fn("Cancelled; no output was created.")
-            return 0
-        destination, output_format = selected
+        if args.extend_existing and (args.format or args.overwrite):
+            raise ValueError("--extend-existing cannot be combined with --format or --overwrite.")
+        if noninteractive and args.output is None and args.extend_existing is None:
+            raise ValueError("Non-interactive workflows require --output or --extend-existing.")
+
+        destination_mode = (
+            DestinationMode.EXTEND if args.extend_existing else
+            DestinationMode.NEW if args.output else
+            _choose_destination_mode(input_fn, output_fn)
+        )
+        if destination_mode is DestinationMode.EXTEND:
+            existing_kwargs = {
+                "input_fn": input_fn,
+                "output_fn": output_fn,
+                "cli_path": args.extend_existing,
+                "use_gui": not noninteractive,
+            }
+            if existing_chooser is not None:
+                existing_kwargs["chooser"] = existing_chooser
+            existing_path = select_existing_workbook(**existing_kwargs)  # type: ignore[arg-type]
+            if existing_path is None:
+                output_fn("Cancelled; the existing workbook was not changed.")
+                return 0
+            destination_plan = inspect_existing_workbook(existing_path)
+            destination, output_format = destination_plan.path, "xlsx"
+            if not noninteractive:
+                output_fn(extension_preview(destination_plan))
+                if mode == "manual" and not _confirm_layout(input_fn, output_fn):
+                    output_fn("Cancelled; the existing workbook was not changed.")
+                    return 0
+        else:
+            selection_kwargs = {
+                "input_fn": input_fn,
+                "output_fn": output_fn,
+                "cli_output": args.output,
+                "explicit_format": args.format,
+                "overwrite": args.overwrite,
+                "use_gui": not noninteractive,
+            }
+            if chooser is not None:
+                selection_kwargs["chooser"] = chooser
+            selected = select_output_path(**selection_kwargs)  # type: ignore[arg-type]
+            if selected is None:
+                output_fn("Cancelled; no output was created.")
+                return 0
+            destination, output_format = selected
+            destination_plan = DestinationPlan(
+                DestinationMode.NEW, destination, output_format
+            )
 
         if mode == "manual":
             if any((args.batch, args.sheet, args.address_column, args.yes)):
                 raise ValueError("Batch-only options cannot be used with --manual.")
             geocoder = geocoder_factory(ProviderProfile())
             return 0 if run_session(
-                geocoder, WorkbookOutput(destination), input_fn, output_fn
+                geocoder,
+                WorkbookOutput(destination, destination_plan=destination_plan),
+                input_fn,
+                output_fn,
             ) else 1
 
         if args.batch:
@@ -201,6 +288,10 @@ def main(
                 output_fn("Cancelled; no input was processed and no output was created.")
                 return 0
             source_path = str(input_path)
+        if destination_mode is DestinationMode.EXTEND and Path(source_path).resolve() == destination.resolve():
+            raise ValueError(
+                "The batch source and extended workbook must be different files."
+            )
         interactive = not noninteractive
         worksheet = _choose_sheet(source_path, args.sheet, interactive, input_fn)
         data = load_source(source_path, worksheet)
@@ -209,7 +300,8 @@ def main(
         with GeocodeCache(cache_path) as cache:
             while True:
                 plan = build_batch_plan(
-                    data, column, destination, output_format, cache
+                    data, column, destination, output_format, cache,
+                    destination_plan=destination_plan,
                 )
                 output_fn(format_plan(plan))
                 if noninteractive:
@@ -229,6 +321,7 @@ def main(
             state_path = job_state_path(destination)
             with JobState(state_path) as job:
                 job.initialize(plan)
+                job.set_expected_fingerprint(destination_plan.base_fingerprint)
                 profile = ProviderProfile(provider_id=plan.provider_id)
                 geocoder = BatchGeocoder(geocoder_factory(profile), profile)
                 try:
@@ -237,7 +330,12 @@ def main(
                         geocoder,
                         cache,
                         job,
-                        get_exporter(destination, output_format),
+                        get_exporter(
+                            destination,
+                            output_format,
+                            destination_plan,
+                            job.expected_fingerprint,
+                        ),
                         output_fn,
                     )
                 except (KeyboardInterrupt, CheckpointError, OSError, RuntimeError) as error:
@@ -251,7 +349,7 @@ def main(
     except KeyboardInterrupt:
         output_fn("Interrupted. Resume the batch with --resume and its state path.")
         return 1
-    except (ValueError, ImportSourceError, JobStateError) as error:
+    except (ValueError, ImportSourceError, JobStateError, WorkbookInspectionError) as error:
         output_fn(f"Error: {error}")
         return 2
     except (CheckpointError, OSError, RuntimeError) as error:

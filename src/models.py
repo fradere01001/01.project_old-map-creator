@@ -16,6 +16,11 @@ class Outcome(str, Enum):
     SERVICE_FAILURE = "service_failure"
 
 
+class DestinationMode(str, Enum):
+    NEW = "new"
+    EXTEND = "extend"
+
+
 def normalize_address(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", str(value or ""))
     return " ".join(normalized.split()).casefold()
@@ -24,6 +29,61 @@ def normalize_address(value: str) -> str:
 def normalize_header(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", str(value or ""))
     return "_".join(normalized.strip().casefold().replace("-", " ").split())
+
+
+def location_identity(
+    address: str | None, latitude: float | None, longitude: float | None
+) -> str | None:
+    normalized = normalize_address(address or "")
+    if normalized:
+        return f"address:{normalized}"
+    if latitude is not None and longitude is not None:
+        return f"coordinates:{float(longitude)!r},{float(latitude)!r}"
+    return None
+
+
+@dataclass(frozen=True)
+class WorkbookLayout:
+    location_sheet: str
+    header_row: int
+    address_column: int
+    latitude_column: int
+    longitude_column: int
+    recognized: bool
+    report_sheet: str
+    report_start_row: int
+
+
+@dataclass(frozen=True)
+class DestinationPlan:
+    mode: DestinationMode
+    path: Path
+    output_format: str
+    layout: WorkbookLayout | None = None
+    base_fingerprint: str | None = None
+    existing_location_identities: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode.value,
+            "path": str(self.path),
+            "output_format": self.output_format,
+            "layout": asdict(self.layout) if self.layout else None,
+            "base_fingerprint": self.base_fingerprint,
+            "existing_location_identities": list(self.existing_location_identities),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DestinationPlan":
+        layout = data.get("layout")
+        return cls(
+            DestinationMode(data["mode"]),
+            Path(data["path"]),
+            data["output_format"],
+            WorkbookLayout(**layout) if layout else None,
+            data.get("base_fingerprint"),
+            tuple(data.get("existing_location_identities", ())),
+        )
 
 
 @dataclass(frozen=True)
@@ -112,6 +172,12 @@ class BatchPlan:
     unique_query_count: int = 0
     cached_query_count: int = 0
     preview: tuple[str, ...] = ()
+    destination_mode: str = DestinationMode.NEW.value
+    workbook_layout: dict[str, Any] | None = None
+    base_fingerprint: str | None = None
+    existing_location_identities: tuple[str, ...] = ()
+    existing_location_count: int = 0
+    suppressed_location_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -119,6 +185,9 @@ class BatchPlan:
         data["output_path"] = str(self.output_path)
         data["records"] = [asdict(record) for record in self.records]
         data["preview"] = list(self.preview)
+        data["existing_location_identities"] = list(
+            self.existing_location_identities
+        )
         return data
 
     @classmethod
@@ -128,6 +197,9 @@ class BatchPlan:
         values["output_path"] = Path(values["output_path"])
         values["records"] = tuple(ImportRecord(**item) for item in values["records"])
         values["preview"] = tuple(values.get("preview", ()))
+        values["existing_location_identities"] = tuple(
+            values.get("existing_location_identities", ())
+        )
         return cls(**values)
 
     def compatibility_fields(self) -> dict[str, Any]:
@@ -139,7 +211,31 @@ class BatchPlan:
             "address_column": self.address_column,
             "provider_id": self.provider_id,
             "provider_options": self.provider_options,
+            "destination_mode": self.destination_mode,
+            "workbook_layout": self.workbook_layout,
+            "base_fingerprint": self.base_fingerprint,
         }
+
+
+def unique_locations(
+    outcomes: list[RowOutcome] | tuple[RowOutcome, ...],
+    existing_identities: tuple[str, ...] | set[str] = (),
+) -> tuple[list[RowOutcome], int]:
+    seen = set(existing_identities)
+    unique: list[RowOutcome] = []
+    suppressed = 0
+    for item in sorted(outcomes, key=lambda value: value.source_row):
+        if item.outcome is not Outcome.RESOLVED:
+            continue
+        identity = location_identity(
+            item.resolved_address, item.latitude, item.longitude
+        )
+        if identity is None or identity in seen:
+            suppressed += 1
+            continue
+        seen.add(identity)
+        unique.append(item)
+    return unique, suppressed
 
 
 @dataclass(frozen=True)
