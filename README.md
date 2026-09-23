@@ -1,14 +1,10 @@
-# 01.project_old-map-creator
-**Idea & what it does:** 
+# Old Map Creator
 
-Old Map Creator is an interactive Python command-line tool that converts place names or addresses into an Excel workbook. It resolves locations with OpenStreetMap's Nominatim service through `geopy` and saves each result as a recoverable `.xls` checkpoint.
+Old Map Creator geocodes place names and addresses with OpenStreetMap's public Nominatim service. It supports interactive entry and confirmed batch imports, writes recoverable checkpoints, and exports XLSX, CSV, GeoJSON, or KML.
 
-## Requirements
+## Install
 
-- Python 3.10 or newer
-- Network access for geocoding
-
-Install the dependencies in a virtual environment:
+Python 3.10 or newer and network access are required for live geocoding.
 
 ```shell
 python3 -m venv .venv
@@ -16,49 +12,78 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-## Run
-
-From the project root:
+## Interactive use
 
 ```shell
-python src/main.py
+python -m src.main
 ```
 
-The program asks for the output workbook before it asks for any places. Only `.xls` is currently supported. When the filename has no extension, `.xls` is appended automatically. If the destination already exists, it is replaced only after explicit confirmation.
+Choose manual entry or batch import. A native Save dialog opens immediately after the mode selection, before addresses are collected, imported, or sent to the provider. It offers `.xlsx`, `.csv`, `.geojson`, and `.kml`; cancelling exits without creating a file. Batch mode then opens a native file picker for the CSV, TXT, or XLSX input. On a headless system, the program falls back to explicit terminal path prompts.
 
-For every resolved location, the workbook contains these columns:
+Manual mode checkpoints every resolved place and immediately returns to the address prompt; type `finish` there when done. A lookup with no match can be retried, corrected, skipped, or used to finish. Service failures are reported separately and can be retried, skipped, or used to finish.
 
-| Address | Latitude | Longitude |
-| --- | ---: | ---: |
-| Resolved display address | Numeric latitude | Numeric longitude |
+## Batch imports
 
-Latitude and longitude are stored as separate numeric cells.
+Inputs may be:
 
-## Interactive flow
+- UTF-8 or UTF-8-BOM CSV, with detected delimiters and a header row
+- UTF-8 TXT, with one address per physical line
+- XLSX, with explicit worksheet selection when multiple sheets exist
 
-Enter a place name or address at `Enter a place (or 'finish'):`. After a successful lookup, choose whether to add another location. Type `finish` at the place prompt to save and exit; finishing before a successful lookup creates a valid header-only workbook.
+The program suggests a uniquely recognized `address`, `location`, `place`, or `indirizzo` column. Otherwise it requires an explicit mapping. Before any request it shows the source, mapping, destination, row/blank/duplicate/unique/cache counts, a five-row preview, and a public-provider warning. You may proceed, change the mapping, or cancel.
 
-If no match is found, the available actions are:
+Equivalent addresses are normalized for Unicode width, whitespace, and case and geocoded once per job. Successful lookups and no-matches are cached between jobs; transient service failures are not.
 
-- `r` — retry the same address
-- `c` — enter a corrected address
-- `s` — skip it and continue
-- `f` — finish and save
+Public Nominatim requests use one worker, a descriptive user agent, finite retries, and at least one second between uncached request starts. For larger or production workloads, use a provider whose usage policy fits that workload.
 
-If the geocoding service times out, is unavailable, or rejects a request, the available actions are retry, skip, or finish. A service failure is reported separately from an address with no match.
+## Outputs and reports
 
-## Saving and recovery
+- XLSX contains `Locations` and a complete, source-ordered `Import Report` worksheet.
+- CSV is a self-reporting row-level import report.
+- GeoJSON contains resolved Point features in longitude/latitude order plus `<name>-report.csv`.
+- KML contains resolved Placemarks in longitude/latitude order plus `<name>-report.csv`.
 
-Every successfully resolved location is checkpointed before the next prompt. Checkpoints are first written beside the destination and then atomically published, so a failed update leaves the previous workbook recoverable. Normal completion performs a final save and reports the output path and saved row count.
+Every row is classified as `resolved`, `blank`, `no_match`, or `service_failure`, with cache and duplicate provenance reported separately. Files are written beside the destination and atomically replaced so a failed checkpoint preserves the prior file.
 
-Pressing `Ctrl-C` after a successful checkpoint exits without deleting the saved workbook and reports its path. Interrupting before the first successful location reports that no location rows were saved.
+Legacy `.xls` output has been fully replaced. Use `.xlsx`; existing `.xls` files are not valid batch inputs and should be converted with a spreadsheet application first.
+
+## Command line
+
+Batch execution is non-interactive and requires an output plus `--yes` confirmation:
+
+```shell
+python -m src.main --batch addresses.csv --address-column Address --output map.xlsx --yes
+python -m src.main --batch addresses.xlsx --sheet Places --address-column Location --output map.geojson --format geojson --yes
+```
+
+An existing destination is protected independently from plan confirmation:
+
+```shell
+python -m src.main --batch addresses.txt --output map.csv --yes --overwrite
+```
+
+Manual mode can also bypass the Save dialog:
+
+```shell
+python -m src.main --manual --output map.xlsx
+```
+
+Interrupted batch state is stored beside the output as `.<output-name>.oldmap-job.sqlite3`. Resume with either the output path or the state path:
+
+```shell
+python -m src.main --resume map.xlsx
+python -m src.main --resume .map.xlsx.oldmap-job.sqlite3
+```
+
+Resume validates the source fingerprint and saved immutable plan, rebuilds primary and companion outputs from committed rows, and does not repeat completed requests. Completed state is retained for audit but is no longer resumable. The application-wide geocode cache is stored in the operating system's standard user cache directory under `old-map-creator`.
+
+Run `python -m src.main --help` for all options. Exit status is `0` for completion/cancellation, `2` for argument or plan errors, and `1` for interruption or runtime/publication failure.
 
 ## Tests
 
-Run the offline unit suite from the project root:
+The suite is offline and never contacts Nominatim:
 
 ```shell
 python -m unittest discover -s tests -v
+openspec validate add-batch-import-and-export --strict
 ```
-
-The tests use fake geocoding responses and do not contact Nominatim.
